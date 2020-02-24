@@ -1,0 +1,386 @@
+---DON'T UPDATE VALUES! :D
+
+UPDATE products
+SET net_price = price-FLOOR(loyalty_points_cost*0.51);
+
+SELECT * FROM orders ORDER BY unique_order_id ASC;
+
+0 total_net_price
+
+UPDATE orders
+SET total_net_price = qtity*net_price 
+FROM products
+WHERE products.prod_id = orders.prod_id;
+
+UPDATE orders
+SET total_net_price = CAST(lp_use AS INTEGER)*qtity*net_price+(1-CAST(lp_use AS INTEGER))*qtity*price
+FROM products
+WHERE products.prod_id = orders.prod_id;
+
+UPDATE orders
+SET total_net_price = qtity*net_price
+FROM products
+WHERE products.prod_id = orders.prod_id AND lp_use='t';
+
+UPDATE orders
+SET total_net_price = qtity*price
+FROM products
+WHERE products.prod_id = orders.prod_id AND lp_use='f';
+
+1 Referrals -- list of partner discounts
+
+(SELECT
+registered_id AS discountee,
+ref_code_used
+FROM
+referrals
+UNION
+SELECT 
+cust_id,
+ref_code
+FROM
+customers
+WHERE
+ref_code IN (
+SELECT
+ref_code_used
+FROM
+referrals
+))ORDER BY ref_code_used;
+
+2 Sales process
+
+SELECT
+order_status,
+FLOOR(AVG(last_updated-order_received)) AS waiting_time
+FROM
+orders
+WHERE
+last_updated BETWEEN '2020-02-01' AND '2020-02-25'
+GROUP BY
+order_status;
+
+SELECT
+order_status,
+FLOOR(AVG(basket_sizes_per_order_status)) AS avg_basket_size
+INTO sales_process
+FROM
+(SELECT
+order_id,
+order_status,
+SUM(total_net_price) AS basket_sizes_per_order_status
+FROM
+orders
+WHERE
+last_updated BETWEEN '2020-02-01' AND '2020-02-25'
+GROUP BY
+order_id, order_status
+ORDER BY order_id ASC)basket_sizes
+GROUP BY
+order_status;
+
+SELECT
+supplier_shipper_id,
+order_status,
+COUNT(supplier_shipper_id) AS suppliers_count
+INTO supplier_dist
+FROM
+orders
+WHERE
+last_updated BETWEEN '2020-02-01' AND '2020-02-25'
+GROUP BY
+supplier_shipper_id, order_status
+ORDER BY
+supplier_shipper_id ASC, order_status ASC;
+
+SELECT
+category,
+order_status,
+COUNT(category) AS category_count
+FROM
+orders
+JOIN
+products ON products.prod_id=orders.prod_id
+WHERE
+last_updated BETWEEN '2020-02-01' AND '2020-02-25'
+GROUP BY category, order_status
+ORDER BY category ASC, order_status ASC;
+
+SELECT sales_process.order_status, avg_basket_size, supplier_shipper_id ,suppliers_count, category, category_count
+FROM sales_process
+JOIN supplier_dist ON sales_process.order_status=supplier_dist.order_status
+JOIN(SELECT
+category,
+order_status,
+COUNT(category) AS category_count
+FROM
+orders
+JOIN
+products ON products.prod_id=orders.prod_id
+WHERE
+last_updated BETWEEN '2020-02-01' AND '2020-02-25'
+GROUP BY category, order_status
+ORDER BY category ASC, order_status ASC)category_query
+ON sales_process.order_status=category_query.order_status
+ORDER BY order_status, avg_basket_size, supplier_shipper_id, suppliers_count, category;
+
+3 repeated purchases [cross_tabulation+new_variable]//order_motivations
+
+SELECT
+FLOOR(AVG(purchase_number)) AS avg_purchase_nr
+FROM
+(SELECT
+user_id,
+COUNT(DISTINCT order_id)purchase_number
+FROM
+orders
+WHERE
+lp_use=false
+GROUP BY
+user_id
+ORDER BY user_id)discounted_buyers;
+
+4 recently abandoned carts
+
+SELECT
+user_id,
+order_id,
+cust_id,
+phone_nr,
+email_address
+FROM
+orders
+LEFT JOIN customers ON orders.user_id=customers.cust_id
+WHERE
+order_status=6
+AND
+last_updated BETWEEN '2020-02-26' AND '2020-03-01';
+
+5 trending product+avg sales+prices//catalogue
+
+SELECT
+top_product.prod_id,
+price,
+net_price,
+loyalty_points_cost,
+avg_sales,
+category
+FROM
+(SELECT
+orders.prod_id,
+FLOOR(AVG(total_net_price)) AS avg_sales
+FROM
+orders
+WHERE
+order_status=5
+AND
+last_updated BETWEEN '2020-02-15' AND '2020-03-01'
+GROUP BY
+orders.prod_id
+ORDER BY
+avg_sales
+DESC
+LIMIT 10
+)top_product
+INNER JOIN products ON top_product.prod_id=products.prod_id
+ORDER BY avg_sales DESC;
+
+25,10
+
+6 targeted advertising
+
+SELECT
+user_id,
+email_address
+FROM
+customers
+INNER JOIN (SELECT
+user_id
+FROM 
+orders
+WHERE
+order_status=5
+AND
+last_updated BETWEEN '2020-02-01' AND '2020-02-10'
+INTERSECT
+SELECT
+user_id
+FROM 
+orders
+WHERE
+order_status=5
+AND
+last_updated BETWEEN '2020-02-25' AND '2020-03-01')oldplayers ON user_id=cust_id
+
+7 avg cust lifetime value
+
+SELECT
+user_id, MAX(last_updated)-MIN(last_updated) AS customer_lifetime,
+SUM(total_net_price) AS customer_value, 
+FLOOR(SUM(total_net_price)/(MAX(last_updated)-MIN(last_updated)+1)) AS approx_daily_cust_value
+FROM
+orders
+WHERE order_status=5
+GROUP BY
+user_id
+ORDER BY
+user_id;
+
+SELECT
+user_id,
+MAX(qtity_purchased)
+FROM
+(SELECT
+user_id,
+prod_id,
+SUM(qtity) AS qtity_purchased
+FROM
+orders
+WHERE order_status=5
+GROUP BY
+user_id, prod_id
+ORDER BY
+user_id ASC, qtity_purchased DESC)all_qtity
+GROUP BY
+user_id;
+
+SELECT
+DISTINCT user_id,
+FIRST_VALUE (prod_id) OVER( 
+PARTITION BY user_id 
+ORDER BY qtity_purchased DESC) AS best_prod_id
+FROM
+(SELECT
+user_id,
+prod_id,
+SUM(qtity) AS qtity_purchased
+FROM
+orders
+WHERE order_status=5
+GROUP BY
+user_id, prod_id
+ORDER BY
+user_id ASC, qtity_purchased DESC)all_qtity
+ORDER BY user_id ASC;
+
+SELECT
+user_id,
+prod_id,
+SUM(qtity) AS qtity_purchased
+FROM
+orders
+WHERE
+order_status=5
+GROUP BY
+user_id, prod_id
+ORDER BY
+user_id ASC, qtity_purchased DESC;
+
+CREATE VIEW segment AS
+ SELECT user_best_pr.user_id,
+    user_best_pr.best_prod_id,
+    products.category
+   FROM products
+     JOIN ( SELECT DISTINCT all_qtity.user_id,
+            first_value(all_qtity.prod_id) OVER (PARTITION BY all_qtity.user_id ORDER BY all_qtity.qtity_purchased DESC) AS best_prod_id
+           FROM ( SELECT orders.user_id,
+                    orders.prod_id,
+                    sum(orders.qtity) AS qtity_purchased
+                   FROM orders
+			WHERE order_status=5
+                  GROUP BY orders.user_id, orders.prod_id
+                  ORDER BY orders.user_id, (sum(orders.qtity)) DESC) all_qtity
+          ORDER BY all_qtity.user_id) user_best_pr ON user_best_pr.best_prod_id = products.prod_id;
+
+SELECT
+cust_val_table.user_id,
+category AS segment,
+customer_lifetime,
+customer_value,
+approx_daily_cust_value
+FROM
+segment
+JOIN
+(SELECT
+user_id, MAX(last_updated)-MIN(last_updated) AS customer_lifetime,
+SUM(total_net_price) AS customer_value, 
+FLOOR(SUM(total_net_price)/(MAX(last_updated)-MIN(last_updated)+1)) AS approx_daily_cust_value
+FROM
+orders
+WHERE
+order_status=5
+GROUP BY
+user_id
+ORDER BY
+user_id)cust_val_table ON cust_val_table.user_id=segment.user_id
+ORDER BY approx_daily_cust_value DESC, customer_lifetime DESC;
+
+8 cohort analysis
+
+--counts from given week
+
+SELECT
+date_trunc('week', first_time) AS given_week,
+COUNT(first_time) AS new_buyers
+FROM
+(SELECT
+user_id,
+MIN(last_updated) AS first_time
+FROM
+orders
+WHERE
+order_status=5
+GROUP BY
+user_id
+ORDER BY
+first_time)first_time_table
+GROUP BY
+given_week
+ORDER BY given_week ASC;
+
+SELECT
+first_time,
+COUNT(first_time) AS new_users
+FROM
+(SELECT
+user_id,
+MIN(last_updated) AS first_time
+FROM
+orders
+WHERE
+order_status=5
+GROUP BY
+user_id
+ORDER BY
+first_time)first_time_table
+GROUP BY
+first_time;
+
+9 sales//nsales
+
+SELECT
+lp_use,
+SUM(total_net_price) AS net_sales
+FROM 
+orders
+WHERE
+order_status=5
+AND
+last_updated BETWEEN '2020-02-01' AND '2020-02-25'
+GROUP BY 
+lp_use;
+
+175
+true
+8db
+14-es
+
+179
+false
+26
+5
+
+
+
+
+
